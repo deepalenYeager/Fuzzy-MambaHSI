@@ -7,7 +7,7 @@ import argparse
 import numpy as np
 from torchvision import models,transforms
 import utils.data_load_operate as data_load_operate
-from utils.Loss import head_loss,resize
+from utils.Loss import head_loss,resize,diversity_loss
 from utils.evaluation import Evaluator
 from utils.HSICommonUtils import normlize3D, ImageStretching
 
@@ -52,6 +52,9 @@ def get_parser():
     parser.add_argument('--val_samples', type=int, default=10)
     parser.add_argument('--exp_name', type=str, default='RUNS')
     parser.add_argument('--record_computecost',type=bool,default=True)
+    parser.add_argument('--T_warm', type=int, default=15, help='fuzzy warm-up epochs')
+    parser.add_argument('--beta_div', type=float, default=0.01, help='diversity regularizer weight')
+    parser.add_argument('--tau_div', type=float, default=0.1, help='diversity hinge threshold')
 
     args = parser.parse_args()
     return args
@@ -209,6 +212,8 @@ if __name__ == '__main__':
             loss_dict = {}
 
             net.train()
+            lam = min(1.0, (epoch + 1) / max(1, args.T_warm))
+            net.set_warmup(lam)
 
             if split_image:
                 x_part1 = x[:, :, :x.shape[2] // 2+5, :]
@@ -218,6 +223,7 @@ if __name__ == '__main__':
                 y_pred_part1 = net(x_part1)
 
                 ls1 = head_loss(loss_func,y_pred_part1, y_part1.long())
+                ls1 = ls1 + args.beta_div * diversity_loss(net.fuzzy_centers(), tau=args.tau_div)
                 optimizer.zero_grad()
                 ls1.backward()
                 optimizer.step()
@@ -225,20 +231,22 @@ if __name__ == '__main__':
 
                 y_pred_part2 = net(x_part2)
                 ls2 = head_loss(loss_func,y_pred_part2, y_part2.long())
+                ls2 = ls2 + args.beta_div * diversity_loss(net.fuzzy_centers(), tau=args.tau_div)
                 optimizer.zero_grad()
                 ls2.backward()
                 optimizer.step()
                 torch.cuda.empty_cache()
-                logger.info('Iter:{}|loss:{}'.format(epoch, (ls1 + ls2).detach().cpu().numpy()))
+                logger.info('Iter:{}|warmup:{:.3f}|loss:{}'.format(epoch, lam, (ls1 + ls2).detach().cpu().numpy()))
 
             else:
                 try:
                     y_pred = net(x)
                     ls = head_loss(loss_func,y_pred, y_train.long())
+                    ls = ls + args.beta_div * diversity_loss(net.fuzzy_centers(), tau=args.tau_div)
                     optimizer.zero_grad()
                     ls.backward()
                     optimizer.step()
-                    logger.info('Iter:{}|loss:{}'.format(epoch, ls.detach().cpu().numpy()))
+                    logger.info('Iter:{}|warmup:{:.3f}|loss:{}'.format(epoch, lam, ls.detach().cpu().numpy()))
                 except:
                     optimizer.zero_grad()
                     torch.cuda.empty_cache()
@@ -250,18 +258,20 @@ if __name__ == '__main__':
 
                     y_pred_part1 = net(x_part1)
                     ls1 = head_loss(loss_func, y_pred_part1, y_part1.long())
+                    ls1 = ls1 + args.beta_div * diversity_loss(net.fuzzy_centers(), tau=args.tau_div)
                     optimizer.zero_grad()
                     ls1.backward()
                     optimizer.step()
 
                     y_pred_part2 = net(x_part2)
                     ls2 = head_loss(loss_func, y_pred_part2, y_part2.long())
+                    ls2 = ls2 + args.beta_div * diversity_loss(net.fuzzy_centers(), tau=args.tau_div)
                     optimizer.zero_grad()
                     ls2.backward()
                     optimizer.step()
 
                     logger.info(
-                        'Iter:{}|loss:{}'.format(epoch, (ls1 + ls2).detach().cpu().numpy()))
+                        'Iter:{}|warmup:{:.3f}|loss:{}'.format(epoch, lam, (ls1 + ls2).detach().cpu().numpy()))
 
             torch.cuda.empty_cache()
             # evaluate stage
