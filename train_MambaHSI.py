@@ -202,6 +202,7 @@ if __name__ == '__main__':
 
         tic1 = time.perf_counter()
         best_val_acc = 0
+        train_start = time.perf_counter()
 
 
         for epoch in range(max_epoch):
@@ -311,6 +312,8 @@ if __name__ == '__main__':
             torch.cuda.empty_cache()
 
 
+        Train_Time_ALL.append(time.perf_counter() - train_start)
+
         logger.info("\n\n====================Starting evaluation for testing set.========================\n")
         pred_test = []
 
@@ -323,6 +326,7 @@ if __name__ == '__main__':
         best_net.load_state_dict(torch.load(load_weight_path))
         best_net.eval()
         test_evaluator = Evaluator(num_class=class_count)
+        test_start = time.perf_counter()
         with torch.no_grad():
             test_evaluator.reset()
             output_test = best_net(x)
@@ -343,6 +347,7 @@ if __name__ == '__main__':
             logger.info('Test {}|OA:{}|MACC:{}|Kappa:{}|MIOU:{}|IOU:{}|ACC:{}'.format(epoch, OA_test, mAcc_test, Kappa_test, mIOU_test, IOU_test,
                                                                                     Acc_test))
             vis_a_image(gt, predict_test, predict_save_path, gt_save_path)
+        Test_Time_ALL.append(time.perf_counter() - test_start)
         # Output infors
         f = open(results_save_path, 'a+')
         str_results = '\n======================' \
@@ -379,18 +384,16 @@ if __name__ == '__main__':
 
     np.set_printoptions(precision=4)
     logger.info("\n====================Mean result of {} times runs =========================".format(len(seed_list)))
-    logger.info('List of OA:', list(OA_ALL))
-    logger.info('List of AA:', list(AA_ALL))
-    logger.info('List of KPP:', list(KPP_ALL))
-    logger.info('OA=', round(np.mean(OA_ALL) * 100, 2), '+-', round(np.std(OA_ALL) * 100, 2))
-    logger.info('AA=', round(np.mean(AA_ALL) * 100, 2), '+-', round(np.std(AA_ALL) * 100, 2))
-    logger.info('Kpp=', round(np.mean(KPP_ALL) * 100, 2), '+-', round(np.std(KPP_ALL) * 100, 2))
-    logger.info('Acc per class=', np.round(np.mean(EACH_ACC_ALL, 0) * 100, decimals=2), '+-',
-          np.round(np.std(EACH_ACC_ALL, 0) * 100, decimals=2))
+    logger.info(f'List of OA: {list(OA_ALL)}')
+    logger.info(f'List of AA: {list(AA_ALL)}')
+    logger.info(f'List of KPP: {list(KPP_ALL)}')
+    logger.info(f'OA= {round(np.mean(OA_ALL) * 100, 2)} +- {round(np.std(OA_ALL) * 100, 2)}')
+    logger.info(f'AA= {round(np.mean(AA_ALL) * 100, 2)} +- {round(np.std(AA_ALL) * 100, 2)}')
+    logger.info(f'Kpp= {round(np.mean(KPP_ALL) * 100, 2)} +- {round(np.std(KPP_ALL) * 100, 2)}')
+    logger.info(f'Acc per class= {np.round(np.mean(EACH_ACC_ALL, 0) * 100, decimals=2)} +- {np.round(np.std(EACH_ACC_ALL, 0) * 100, decimals=2)}')
 
-    logger.info("Average training time=", round(np.mean(Train_Time_ALL), 2), '+-', round(np.std(Train_Time_ALL), 3))
-    logger.info("Average testing time=", round(np.mean(Test_Time_ALL) * 1000, 2), '+-',
-          round(np.std(Test_Time_ALL) * 1000, 3))
+    logger.info(f'Average training time= {round(np.mean(Train_Time_ALL), 2)} +- {round(np.std(Train_Time_ALL), 3)}')
+    logger.info(f'Average testing time= {round(np.mean(Test_Time_ALL) * 1000, 2)} +- {round(np.std(Test_Time_ALL) * 1000, 3)}')
 
     # Output infors
     mean_result_path = os.path.join(save_folder,'mean_result.txt')
