@@ -2,7 +2,63 @@ import math
 import torch
 from torch import nn
 from torch.nn import functional as F
-from mamba_ssm import Mamba2
+
+try:
+    from mamba_ssm import Mamba2 as _Mamba2
+    _MAMBA2_IMPORTED = True
+except ImportError:
+    _MAMBA2_IMPORTED = False
+
+
+def _cuda_ext_available() -> bool:
+    """Return True only when the causal_conv1d CUDA extension is present and loadable."""
+    if not _MAMBA2_IMPORTED:
+        return False
+    try:
+        import causal_conv1d_cuda  # noqa: F401
+        return causal_conv1d_cuda is not None
+    except Exception:
+        return False
+
+
+_USE_MAMBA2 = _cuda_ext_available()
+
+
+class _PureTorchMamba(nn.Module):
+    """Pure-PyTorch SSM used as a drop-in replacement for Mamba2 on CPU or when
+    the causal_conv1d CUDA extension is unavailable."""
+
+    def __init__(self, d_model, d_state=64, d_conv=4, expand=2, headdim=64, ngroups=1, **_):
+        super().__init__()
+        d_inner = d_model * expand
+        self.in_proj = nn.Linear(d_model, d_inner * 2, bias=False)
+        self.conv1d = nn.Conv1d(d_inner, d_inner, d_conv,
+                                padding=d_conv - 1, groups=d_inner, bias=True)
+        self.act = nn.SiLU()
+        self.norm = nn.LayerNorm(d_inner)
+        self.out_proj = nn.Linear(d_inner, d_model, bias=False)
+
+    def forward(self, x):
+        B, L, D = x.shape
+        xz = self.in_proj(x)
+        x_in, z = xz.chunk(2, dim=-1)
+        x_conv = self.conv1d(x_in.transpose(1, 2))[:, :, :L].transpose(1, 2)
+        x_conv = self.act(x_conv)
+        out = self.norm(x_conv * self.act(z))
+        return self.out_proj(out)
+
+
+def _make_mamba(d_model, d_state, d_conv, expand, headdim, ngroups):
+    """Return a Mamba2 instance when CUDA extensions are available, else _PureTorchMamba."""
+    if _USE_MAMBA2:
+        return _Mamba2(
+            d_model=d_model, d_state=d_state, d_conv=d_conv,
+            expand=expand, headdim=headdim, ngroups=ngroups,
+        )
+    return _PureTorchMamba(
+        d_model=d_model, d_state=d_state, d_conv=d_conv,
+        expand=expand, headdim=headdim, ngroups=ngroups,
+    )
 
 
 def _choose_mamba2_kwargs(d_model, expand=2, preferred_headdim=64, preferred_dstate=64):
@@ -66,13 +122,9 @@ class FSpaMB(nn.Module):
         self.warmup = 1.0
 
         headdim, d_state = _choose_mamba2_kwargs(d_model)
-        self.mamba = Mamba2(
-            d_model=d_model,
-            d_state=d_state,
-            d_conv=4,
-            expand=2,
-            headdim=headdim,
-            ngroups=1,
+        self.mamba = _make_mamba(
+            d_model=d_model, d_state=d_state, d_conv=4,
+            expand=2, headdim=headdim, ngroups=1,
         )
 
         self.proj = nn.Linear(d_model, d_prime, bias=False)
@@ -121,13 +173,9 @@ class FSpeMB(nn.Module):
         self.use_residual = use_residual
 
         headdim, d_state = _choose_mamba2_kwargs(m_dim, preferred_headdim=min(64, m_dim * 2))
-        self.mamba = Mamba2(
-            d_model=m_dim,
-            d_state=d_state,
-            d_conv=4,
-            expand=2,
-            headdim=headdim,
-            ngroups=1,
+        self.mamba = _make_mamba(
+            d_model=m_dim, d_state=d_state, d_conv=4,
+            expand=2, headdim=headdim, ngroups=1,
         )
 
         self.norm = nn.GroupNorm(1, num_groups * m_dim)
