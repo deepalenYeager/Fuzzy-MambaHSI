@@ -55,6 +55,10 @@ def get_parser():
     parser.add_argument('--T_warm', type=int, default=15, help='fuzzy warm-up epochs')
     parser.add_argument('--beta_div', type=float, default=0.01, help='diversity regularizer weight')
     parser.add_argument('--tau_div', type=float, default=0.1, help='diversity hinge threshold')
+    parser.add_argument('--n_splits', type=int, default=2,
+                        help='number of horizontal strips for large-image datasets (increase to reduce peak VRAM)')
+    parser.add_argument('--use_amp', action='store_true',
+                        help='enable automatic mixed precision (FP16) to reduce VRAM usage')
 
     args = parser.parse_args()
     return args
@@ -84,10 +88,25 @@ paras_dict = {'net_name':net_name,'dataset_index':dataset_index,'num_list':num_l
 data_set_name_list = ['UP', 'HanChuan', 'HongHu', 'Houston']
 data_set_name = data_set_name_list[dataset_index]
 
-if data_set_name in ['HanChuan','Houston']:
+if data_set_name in ['HanChuan', 'HongHu', 'Houston']:
     split_image = True
 else:
     split_image = False
+
+
+def forward_tiled(net, x, n_splits, overlap=5):
+    """Run net on x split into n_splits horizontal strips; stitch logits back together."""
+    H = x.shape[2]
+    size = H // n_splits
+    strips = []
+    for i in range(n_splits):
+        s = max(0, i * size - overlap)
+        e = min(H, (i + 1) * size + (0 if i == n_splits - 1 else overlap))
+        out = net(x[:, :, s:e, :])
+        lo = overlap if i > 0 else 0
+        hi = out.shape[2] - overlap if i < n_splits - 1 else out.shape[2]
+        strips.append(out[:, :, lo:hi, :])
+    return torch.cat(strips, dim=2)
 
 transform = transforms.Compose([
     # transforms.Resize((2048, 1024)),
@@ -191,6 +210,9 @@ if __name__ == '__main__':
         val_acc_list = [0]
 
         optimizer = torch.optim.Adam(net.parameters(),lr=learning_rate)
+        use_amp = args.use_amp and torch.cuda.is_available()
+        scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+        n_splits = args.n_splits
 
         logger.info(optimizer)
         best_loss = 99999
@@ -217,70 +239,45 @@ if __name__ == '__main__':
             net.set_warmup(lam)
 
             if split_image:
-                x_part1 = x[:, :, :x.shape[2] // 2+5, :]
-                y_part1 = y_train[:,:x.shape[2] // 2+5,:]
-                x_part2 = x[:, :, x.shape[2] // 2 - 5: , :]
-                y_part2 = y_train[:,x.shape[2] // 2 - 5:,:]
-                y_pred_part1 = net(x_part1)
-
-                ls1 = head_loss(loss_func,y_pred_part1, y_part1.long())
-                ls1 = ls1 + args.beta_div * diversity_loss(net.fuzzy_centers(), tau=args.tau_div)
-                optimizer.zero_grad()
-                ls1.backward()
-                optimizer.step()
-                torch.cuda.empty_cache()
-
-                y_pred_part2 = net(x_part2)
-                ls2 = head_loss(loss_func,y_pred_part2, y_part2.long())
-                ls2 = ls2 + args.beta_div * diversity_loss(net.fuzzy_centers(), tau=args.tau_div)
-                optimizer.zero_grad()
-                ls2.backward()
-                optimizer.step()
-                torch.cuda.empty_cache()
-                logger.info('Iter:{}|warmup:{:.3f}|loss:{}'.format(epoch, lam, (ls1 + ls2).detach().cpu().numpy()))
+                H = x.shape[2]
+                size = H // n_splits
+                overlap = 5
+                total_loss = 0.0
+                for i in range(n_splits):
+                    s = max(0, i * size - overlap)
+                    e = min(H, (i + 1) * size + (0 if i == n_splits - 1 else overlap))
+                    xp = x[:, :, s:e, :]
+                    yp = y_train[:, s:e, :]
+                    optimizer.zero_grad()
+                    with torch.cuda.amp.autocast(enabled=use_amp):
+                        y_pred_p = net(xp)
+                        ls_p = head_loss(loss_func, y_pred_p, yp.long())
+                        ls_p = ls_p + args.beta_div * diversity_loss(net.fuzzy_centers(), tau=args.tau_div)
+                    scaler.scale(ls_p).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
+                    torch.cuda.empty_cache()
+                    total_loss += ls_p.detach().cpu().numpy()
+                logger.info('Iter:{}|warmup:{:.3f}|loss:{}'.format(epoch, lam, total_loss))
 
             else:
-                try:
+                optimizer.zero_grad()
+                with torch.cuda.amp.autocast(enabled=use_amp):
                     y_pred = net(x)
-                    ls = head_loss(loss_func,y_pred, y_train.long())
+                    ls = head_loss(loss_func, y_pred, y_train.long())
                     ls = ls + args.beta_div * diversity_loss(net.fuzzy_centers(), tau=args.tau_div)
-                    optimizer.zero_grad()
-                    ls.backward()
-                    optimizer.step()
-                    logger.info('Iter:{}|warmup:{:.3f}|loss:{}'.format(epoch, lam, ls.detach().cpu().numpy()))
-                except:
-                    optimizer.zero_grad()
-                    torch.cuda.empty_cache()
-                    split_image=True
-                    x_part1 = x[:, :, :x.shape[2] // 2 + 5, :]
-                    y_part1 = y_train[:, :x.shape[2] // 2 + 5, :]
-                    x_part2 = x[:, :, x.shape[2] // 2 - 5:, :]
-                    y_part2 = y_train[:, x.shape[2] // 2 - 5:, :]
-
-                    y_pred_part1 = net(x_part1)
-                    ls1 = head_loss(loss_func, y_pred_part1, y_part1.long())
-                    ls1 = ls1 + args.beta_div * diversity_loss(net.fuzzy_centers(), tau=args.tau_div)
-                    optimizer.zero_grad()
-                    ls1.backward()
-                    optimizer.step()
-
-                    y_pred_part2 = net(x_part2)
-                    ls2 = head_loss(loss_func, y_pred_part2, y_part2.long())
-                    ls2 = ls2 + args.beta_div * diversity_loss(net.fuzzy_centers(), tau=args.tau_div)
-                    optimizer.zero_grad()
-                    ls2.backward()
-                    optimizer.step()
-
-                    logger.info(
-                        'Iter:{}|warmup:{:.3f}|loss:{}'.format(epoch, lam, (ls1 + ls2).detach().cpu().numpy()))
+                scaler.scale(ls).backward()
+                scaler.step(optimizer)
+                scaler.update()
+                logger.info('Iter:{}|warmup:{:.3f}|loss:{}'.format(epoch, lam, ls.detach().cpu().numpy()))
 
             torch.cuda.empty_cache()
             # evaluate stage
             net.eval()
             with torch.no_grad():
                 evaluator.reset()
-                # output_val = net(x)
-                output_val = net(x)
+                with torch.cuda.amp.autocast(enabled=use_amp):
+                    output_val = forward_tiled(net, x, n_splits) if split_image else net(x)
                 y_val = val_label.unsqueeze(0)
                 seg_logits = resize(input=output_val,
                                     size=y_val.shape[1:],
@@ -329,7 +326,8 @@ if __name__ == '__main__':
         test_start = time.perf_counter()
         with torch.no_grad():
             test_evaluator.reset()
-            output_test = best_net(x)
+            with torch.cuda.amp.autocast(enabled=use_amp):
+                output_test = forward_tiled(best_net, x, n_splits) if split_image else best_net(x)
 
             y_test = test_label.unsqueeze(0)
             seg_logits_test = resize(input=output_test,
