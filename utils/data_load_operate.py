@@ -65,7 +65,8 @@ def sampling(ratio_list, num_list, gt_reshape, class_count, Flag):
             if len(cls_index) > num_list[0]:
                 train_index_flag = num_list[0]
             else:
-                train_index_flag = 15
+                # Keep all available samples for small classes instead of a hard-coded value.
+                train_index_flag = len(cls_index)
             val_index_flag = num_list[1]
 
         train_label_index_dict[cls] = list(cls_index[:train_index_flag])
@@ -101,7 +102,7 @@ def select_vector(data_padded, pos_x, pos_y):
     return select_vector
 
 
-def HSI_create_pathes(data_padded, hsi_h, hsi_w, data_indexes, patch_length, flag, device='cuda:0'):
+def HSI_create_patches(data_padded, hsi_h, hsi_w, data_indexes, patch_length, flag, device='cuda:0'):
     h_p, w_p, c = data_padded.shape
 
     data_size = len(data_indexes)
@@ -146,9 +147,9 @@ def generate_iter_1(data_padded, hsi_h, hsi_w, label_reshape, index, patch_lengt
 
     # for data
     if model_type_flag == 1:  # data for single spatial net
-        spa_train_samples = HSI_create_pathes(data_padded_torch, hsi_h, hsi_w, index[0], patch_length, 1)
-        spa_val_samples = HSI_create_pathes(data_padded_torch, hsi_h, hsi_w, index[1], patch_length, 1)
-        spa_test_samples = HSI_create_pathes(data_padded_torch, hsi_h, hsi_w, index[2], patch_length, 1)
+        spa_train_samples = HSI_create_patches(data_padded_torch, hsi_h, hsi_w, index[0], patch_length, 1)
+        spa_val_samples = HSI_create_patches(data_padded_torch, hsi_h, hsi_w, index[1], patch_length, 1)
+        spa_test_samples = HSI_create_patches(data_padded_torch, hsi_h, hsi_w, index[2], patch_length, 1)
 
         if model_3D_spa_flag == 1:  # spatial 3D patch
             spa_train_samples = spa_train_samples.unsqueeze(1)
@@ -162,24 +163,24 @@ def generate_iter_1(data_padded, hsi_h, hsi_w, label_reshape, index, patch_lengt
 
 
     elif model_type_flag == 2:  # data for single spectral net
-        spe_train_samples = HSI_create_pathes(data_padded_torch, hsi_h, hsi_w, index[0], patch_length, 2)
-        spe_val_samples = HSI_create_pathes(data_padded_torch, hsi_h, hsi_w, index[1], patch_length, 2)
-        spe_test_samples = HSI_create_pathes(data_padded_torch, hsi_h, hsi_w, index[2], patch_length, 2)
+        spe_train_samples = HSI_create_patches(data_padded_torch, hsi_h, hsi_w, index[0], patch_length, 2)
+        spe_val_samples = HSI_create_patches(data_padded_torch, hsi_h, hsi_w, index[1], patch_length, 2)
+        spe_test_samples = HSI_create_patches(data_padded_torch, hsi_h, hsi_w, index[2], patch_length, 2)
 
         torch_dataset_train = Data.TensorDataset(spe_train_samples, y_tensor_train)
         torch_dataset_val = Data.TensorDataset(spe_val_samples, y_tensor_val)
         torch_dataset_test = Data.TensorDataset(spe_test_samples, y_tensor_test)
 
     elif model_type_flag >= 3:  # data for spectral-spatial net
-        # spatail data
-        spa_train_samples = HSI_create_pathes(data_padded_torch, hsi_h, hsi_w, index[0], patch_length, 1)
-        spa_val_samples = HSI_create_pathes(data_padded_torch, hsi_h, hsi_w, index[1], patch_length, 1)
-        spa_test_samples = HSI_create_pathes(data_padded_torch, hsi_h, hsi_w, index[2], patch_length, 1)
+        # spatial data
+        spa_train_samples = HSI_create_patches(data_padded_torch, hsi_h, hsi_w, index[0], patch_length, 1)
+        spa_val_samples = HSI_create_patches(data_padded_torch, hsi_h, hsi_w, index[1], patch_length, 1)
+        spa_test_samples = HSI_create_patches(data_padded_torch, hsi_h, hsi_w, index[2], patch_length, 1)
 
         # spectral data
-        spe_train_samples = HSI_create_pathes(data_padded_torch, hsi_h, hsi_w, index[0], patch_length, 2)
-        spe_val_samples = HSI_create_pathes(data_padded_torch, hsi_h, hsi_w, index[1], patch_length, 2)
-        spe_test_samples = HSI_create_pathes(data_padded_torch, hsi_h, hsi_w, index[2], patch_length, 2)
+        spe_train_samples = HSI_create_patches(data_padded_torch, hsi_h, hsi_w, index[0], patch_length, 2)
+        spe_val_samples = HSI_create_patches(data_padded_torch, hsi_h, hsi_w, index[1], patch_length, 2)
+        spe_test_samples = HSI_create_patches(data_padded_torch, hsi_h, hsi_w, index[2], patch_length, 2)
 
         torch_dataset_train = Data.TensorDataset(spa_train_samples, spe_train_samples, y_tensor_train)
         torch_dataset_val = Data.TensorDataset(spa_val_samples, spe_val_samples, y_tensor_val)
@@ -202,7 +203,7 @@ def generate_iter_1(data_padded, hsi_h, hsi_w, label_reshape, index, patch_lengt
     return train_iter, test_iter, val_iter
 
 
-def generate_auxilary_iter(data_padded, hsi_h, hsi_w, label_reshape, aux_index, patch_length, batch_size, model_type_flag,
+def generate_auxiliary_iter(data_padded, hsi_h, hsi_w, label_reshape, aux_index, patch_length, batch_size, model_type_flag,
                     model_3D_spa_flag, last_batch_flag=0, data_auto_number=0, aa=0, bb=0, cc=0):
     # flag for single spatial net or single spectral net or spectral-spatial net
 
@@ -213,21 +214,21 @@ def generate_auxilary_iter(data_padded, hsi_h, hsi_w, label_reshape, aux_index, 
 
     # for data
     if model_type_flag == 1:  # data for single spatial net
-        spa_aux_samples = HSI_create_pathes(data_padded_torch, hsi_h, hsi_w, aux_index, patch_length, 1)
+        spa_aux_samples = HSI_create_patches(data_padded_torch, hsi_h, hsi_w, aux_index, patch_length, 1)
         if model_3D_spa_flag == 1:  # spatial 3D patch
             spa_aux_samples = spa_aux_samples.unsqueeze(1)
         torch_dataset_aux = Data.TensorDataset(spa_aux_samples, y_tensor_aux)
 
 
     elif model_type_flag == 2:  # data for single spectral net
-        spe_aux_samples = HSI_create_pathes(data_padded_torch, hsi_h, hsi_w, aux_index, patch_length, 2)
+        spe_aux_samples = HSI_create_patches(data_padded_torch, hsi_h, hsi_w, aux_index, patch_length, 2)
         torch_dataset_aux = Data.TensorDataset(spe_aux_samples, y_tensor_aux)
 
     elif model_type_flag >= 3:  # data for spectral-spatial net
-        # spatail data
-        spa_aux_samples = HSI_create_pathes(data_padded_torch, hsi_h, hsi_w, aux_index, patch_length, 1)
+        # spatial data
+        spa_aux_samples = HSI_create_patches(data_padded_torch, hsi_h, hsi_w, aux_index, patch_length, 1)
         # spectral data
-        spe_aux_samples = HSI_create_pathes(data_padded_torch, hsi_h, hsi_w, aux_index, patch_length, 2)
+        spe_aux_samples = HSI_create_patches(data_padded_torch, hsi_h, hsi_w, aux_index, patch_length, 2)
         torch_dataset_aux = Data.TensorDataset(spa_aux_samples, spe_aux_samples, y_tensor_aux)
 
     if last_batch_flag == 1:
@@ -278,16 +279,16 @@ def generate_iter_2(data_padded, hsi_h, hsi_w, label_reshape, index, patch_lengt
     y_tensor_total = torch.from_numpy(total_labels).type(torch.FloatTensor)
 
     if model_type_flag == 1:
-        total_samples = HSI_create_pathes(data_padded_torch, hsi_h, hsi_w, index, patch_length, 1)
+        total_samples = HSI_create_patches(data_padded_torch, hsi_h, hsi_w, index, patch_length, 1)
         if model_3D_spa_flag == 1:  # spatial 3D patch
             total_samples = total_samples.unsqueeze(1)
         torch_dataset_total = Data.TensorDataset(total_samples, y_tensor_total)
     elif model_type_flag == 2:
-        total_samples = HSI_create_pathes(data_padded_torch, hsi_h, hsi_w, index, patch_length, 2)
+        total_samples = HSI_create_patches(data_padded_torch, hsi_h, hsi_w, index, patch_length, 2)
         torch_dataset_total = Data.TensorDataset(total_samples, y_tensor_total)
     elif model_type_flag == 3:
-        spa_total_samples = HSI_create_pathes(data_padded_torch, hsi_h, hsi_w, index, patch_length, 1)
-        spe_total_samples = HSI_create_pathes(data_padded_torch, hsi_h, hsi_w, index, patch_length, 2)
+        spa_total_samples = HSI_create_patches(data_padded_torch, hsi_h, hsi_w, index, patch_length, 1)
+        spe_total_samples = HSI_create_patches(data_padded_torch, hsi_h, hsi_w, index, patch_length, 2)
         torch_dataset_total = Data.TensorDataset(spa_total_samples, spe_total_samples, y_tensor_total)
 
     total_iter = Data.DataLoader(dataset=torch_dataset_total, batch_size=batch_size, shuffle=False, num_workers=0)
@@ -331,16 +332,20 @@ def generate_all_iter(data, labels, patch_length,batch_size, device, model_type_
     # all_index = np.array([i for i in range(hsi_h*hsi_w)])
     data_padded_torch = torch.from_numpy(data_padded).type(torch.FloatTensor).to(device)
     if model_type_flag == 1:  # data for single spatial net
-        spa_all_samples = HSI_create_pathes(data_padded_torch, hsi_h, hsi_w, all_index, patch_length, 1,device)
+        spa_all_samples = HSI_create_patches(data_padded_torch, hsi_h, hsi_w, all_index, patch_length, 1,device)
         if model_3D_spa_flag == 1:  # spatial 3D patch
             spa_all_samples = spa_all_samples.unsqueeze(1)
         torch_dataset = Data.TensorDataset(spa_all_samples, y_tensor_label)
     elif model_type_flag == 2: # data for single spectral net
-        spe_all_samples = HSI_create_pathes(data_padded_torch, hsi_h, hsi_w, all_index, patch_length, 2,device)
+        spe_all_samples = HSI_create_patches(data_padded_torch, hsi_h, hsi_w, all_index, patch_length, 2,device)
         torch_dataset = Data.TensorDataset(spe_all_samples, y_tensor_label)
     elif model_type_flag == 3:  # data for spectral-spatial net
-        spa_all_samples = HSI_create_pathes(data_padded_torch, hsi_h, hsi_w, all_index, patch_length, 1,device)
-        spe_all_samples = HSI_create_pathes(data_padded_torch, hsi_h, hsi_w, all_index, patch_length, 2,device)
+        spa_all_samples = HSI_create_patches(data_padded_torch, hsi_h, hsi_w, all_index, patch_length, 1,device)
+        spe_all_samples = HSI_create_patches(data_padded_torch, hsi_h, hsi_w, all_index, patch_length, 2,device)
         torch_dataset = Data.TensorDataset(spa_all_samples, spe_all_samples, y_tensor_label)
     all_iter = Data.DataLoader(dataset=torch_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
     return all_iter
+
+# Backward-compatible aliases for previous misspellings.
+HSI_create_pathes = HSI_create_patches
+generate_auxilary_iter = generate_auxiliary_iter

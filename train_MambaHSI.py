@@ -80,7 +80,7 @@ paras_dict = {'net_name':net_name,'dataset_index':dataset_index,'num_list':num_l
               'lr':learning_rate,'seed_list':seed_list}
 
 
-                      # 0        1         2         3        4
+                      # 0        1         2         3
 data_set_name_list = ['UP', 'HanChuan', 'HongHu', 'Houston']
 data_set_name = data_set_name_list[dataset_index]
 
