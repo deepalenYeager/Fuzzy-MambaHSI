@@ -109,12 +109,17 @@ class MambaHSI(nn.Module):
         return centers
 
     def forward(self, x):
-        S, phi_bar = self.fuzzy_grouping(x)  # S: [B, G, C, H, W]
-        B, G, C, H, W = S.shape
+        alpha, phi_bar = self.fuzzy_grouping(x)  # alpha: [G, C]
+        B, C, H, W = x.shape
+        G = self.num_groups
 
         embeds = []
         for g in range(G):
-            embeds.append(self.group_embeddings[g](S[:, g]))
+            # Compute each group's weighted input on the fly; avoids holding a
+            # [B, G, C, H, W] tensor alive during training (critical for large HSIs).
+            S_g = x * alpha[g].view(1, C, 1, 1)
+            embeds.append(self.group_embeddings[g](S_g))
+            del S_g
         h_grouped = torch.stack(embeds, dim=1)  # [B, G, M, H, W]
         h = h_grouped.view(B, G * self.m_dim, H, W)
 

@@ -20,7 +20,10 @@ from model.MambaHSI import MambaHSI
 
 from calflops import calculate_flops
 
-torch.autograd.set_detect_anomaly(True)
+# Anomaly detection is opt-in; leaving it on permanently roughly doubles peak
+# activation memory, which alone OOMs the larger HSI datasets.
+if os.environ.get('FUZZY_MAMBAHSI_DETECT_ANOMALY', '0') == '1':
+    torch.autograd.set_detect_anomaly(True)
 
 time_current = time.strftime("%y-%m-%d-%H.%M", time.localtime())
 
@@ -218,9 +221,19 @@ if __name__ == '__main__':
         best_loss = 99999
         if record_computecost:
             net.eval()
-            flops, macs1, para = calculate_flops(model=net,
-                                                 input_shape=(1, x.shape[1], x.shape[2], x.shape[3]), )
-            logger.info("para:{}\n,flops:{}".format(para, flops))
+            # calflops traces a real forward pass at the given input shape and
+            # does not honour the tiled forward, so the full-image trace can
+            # OOM on large datasets. Skip gracefully so training still runs.
+            try:
+                flops, macs1, para = calculate_flops(model=net,
+                                                     input_shape=(1, x.shape[1], x.shape[2], x.shape[3]), )
+                logger.info("para:{}\n,flops:{}".format(para, flops))
+            except RuntimeError as e:
+                if 'out of memory' in str(e).lower():
+                    logger.info("Skipping FLOPs measurement (OOM on full-image trace): {}".format(e))
+                    torch.cuda.empty_cache()
+                else:
+                    raise
 
         tic1 = time.perf_counter()
         best_val_acc = 0

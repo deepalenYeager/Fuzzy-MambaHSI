@@ -102,12 +102,12 @@ class FuzzySpectralGrouping(nn.Module):
 
     def forward(self, x):
         # x: [B, C, H, W]
+        # Returning alpha (shape [G, C]) rather than a materialised
+        # [B, G, C, H, W] tensor avoids an 8x memory blow-up on large images.
         alpha = self.membership()
         phi = alpha.mean(dim=1)
         phi_bar = phi / (phi.sum() + 1e-8)
-        # S: [B, G, C, H, W]
-        S = x.unsqueeze(1) * alpha.view(1, self.num_groups, self.channels, 1, 1)
-        return S, phi_bar
+        return alpha, phi_bar
 
 
 class FSpaMB(nn.Module):
