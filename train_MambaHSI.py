@@ -213,6 +213,8 @@ if __name__ == '__main__':
         val_acc_list = [0]
 
         optimizer = torch.optim.Adam(net.parameters(),lr=learning_rate)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=max_epoch, eta_min=learning_rate * 1e-2)
         use_amp = args.use_amp and torch.cuda.is_available()
         scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
         n_splits = args.n_splits
@@ -271,7 +273,8 @@ if __name__ == '__main__':
                     scaler.update()
                     torch.cuda.empty_cache()
                     total_loss += ls_p.detach().cpu().numpy()
-                logger.info('Iter:{}|warmup:{:.3f}|loss:{}'.format(epoch, lam, total_loss))
+                logger.info('Iter:{}|warmup:{:.3f}|lr:{:.6f}|loss:{}'.format(
+                    epoch, lam, optimizer.param_groups[0]['lr'], total_loss))
 
             else:
                 optimizer.zero_grad()
@@ -282,8 +285,10 @@ if __name__ == '__main__':
                 scaler.scale(ls).backward()
                 scaler.step(optimizer)
                 scaler.update()
-                logger.info('Iter:{}|warmup:{:.3f}|loss:{}'.format(epoch, lam, ls.detach().cpu().numpy()))
+                logger.info('Iter:{}|warmup:{:.3f}|lr:{:.6f}|loss:{}'.format(
+                    epoch, lam, optimizer.param_groups[0]['lr'], ls.detach().cpu().numpy()))
 
+            scheduler.step()
             torch.cuda.empty_cache()
             # evaluate stage
             net.eval()
