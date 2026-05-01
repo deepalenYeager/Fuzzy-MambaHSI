@@ -2,7 +2,6 @@ import torch
 from torch import nn
 
 from model.fuzzy_modules import (
-    FuzzySpectralGrouping,
     FSpaMB,
     FSpeMB,
     TSSFM,
@@ -64,16 +63,11 @@ class MambaHSI(nn.Module):
         self.num_groups = G
         self.m_dim = hidden_dim // G
 
-        self.fuzzy_grouping = FuzzySpectralGrouping(in_channels, G)
-
-        self.group_embeddings = nn.ModuleList([
-            nn.Sequential(
-                nn.Conv2d(in_channels, self.m_dim, kernel_size=1),
-                nn.GroupNorm(min(group_num, self.m_dim), self.m_dim),
-                nn.SiLU(),
-            )
-            for _ in range(G)
-        ])
+        self.patch_embedding = nn.Sequential(
+            nn.Conv2d(in_channels=in_channels, out_channels=hidden_dim, kernel_size=1, stride=1, padding=0),
+            nn.GroupNorm(group_num, hidden_dim),
+            nn.SiLU(),
+        )
 
         self.blocks = nn.ModuleList([
             FuzzyEncoderBlock(
@@ -102,26 +96,17 @@ class MambaHSI(nn.Module):
             block.set_warmup(lam)
 
     def fuzzy_centers(self):
-        centers = [self.fuzzy_grouping.centers.unsqueeze(-1)]
+        centers = []
         for block in self.blocks:
             centers.append(block.fspa.rule_centers)
             centers.append(block.tssfm.rule_centers)
         return centers
 
     def forward(self, x):
-        alpha, phi_bar = self.fuzzy_grouping(x)  # alpha: [G, C]
-        B, C, H, W = x.shape
         G = self.num_groups
+        phi_bar = torch.full((G,), 1.0 / G, device=x.device)
 
-        embeds = []
-        for g in range(G):
-            # Compute each group's weighted input on the fly; avoids holding a
-            # [B, G, C, H, W] tensor alive during training (critical for large HSIs).
-            S_g = x * alpha[g].view(1, C, 1, 1)
-            embeds.append(self.group_embeddings[g](S_g))
-            del S_g
-        h_grouped = torch.stack(embeds, dim=1)  # [B, G, M, H, W]
-        h = h_grouped.view(B, G * self.m_dim, H, W)
+        h = self.patch_embedding(x)
 
         for block in self.blocks:
             h = block(h, phi_bar)
