@@ -185,11 +185,22 @@ class FSpeMB(nn.Module):
         self.group_bias = nn.Parameter(torch.zeros(num_groups, d_out))
         nn.init.kaiming_uniform_(self.group_up, a=math.sqrt(5))
 
+    # Mamba2 launches a (X, batch*nchunks, nheads) Triton grid, and CUDA caps
+    # the y dim at 65535. Pseudo-batch B*H*W (207k for Pavia U) overflows it
+    # and Triton aborts with "invalid argument", so chunk to stay under the cap.
+    _MAMBA_MAX_BATCH = 32768
+
     def forward(self, h_grouped, phi_bar):
         # h_grouped: [B, G, M, H, W]
         B, G, M, H, W = h_grouped.shape
         hf = h_grouped.permute(0, 3, 4, 1, 2).contiguous().view(B * H * W, G, M)
-        hr = self.mamba(hf)
+        N = hf.shape[0]
+        if N <= self._MAMBA_MAX_BATCH:
+            hr = self.mamba(hf)
+        else:
+            chunks = [self.mamba(hf[i:i + self._MAMBA_MAX_BATCH])
+                      for i in range(0, N, self._MAMBA_MAX_BATCH)]
+            hr = torch.cat(chunks, dim=0)
         hr_flat = hr.view(B, H, W, G * M).permute(0, 3, 1, 2).contiguous()
         hr_flat = self.act(self.norm(hr_flat))
         hr = hr_flat.view(B, G, M, H, W)
