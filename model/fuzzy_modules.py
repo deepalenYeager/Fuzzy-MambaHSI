@@ -62,39 +62,35 @@ def _make_mamba(d_model, d_state, d_conv, expand, headdim, ngroups):
 
 
 def _choose_mamba2_kwargs(d_model, expand=2, preferred_headdim=64, preferred_dstate=64, ngroups=1):
-    """Pick (headdim, d_state) that satisfy Mamba2 divisibility constraints.
+    """Pick (headdim, d_state) so causal_conv1d_cuda accepts the fast path.
 
-    causal_conv1d_cuda's channel-last fast path checks
-    ``stride(0) % 8 == 0 and stride(2) % 8 == 0`` on ``xBC.transpose(1, 2)``.
-    Since xBC is a view sliced out of zxbcdt, its stride(2) after the
-    transpose equals ``d_in_proj = 2*d_inner + 2*ngroups*d_state + nheads``,
-    so we must keep that quantity divisible by 8 or Mamba aborts with
-    "causal_conv1d with channel last layout requires strides ... multiples of 8".
+    Two divisibility constraints from mamba_ssm + causal_conv1d:
+      1. conv_dim = d_inner + 2*ngroups*d_state must be divisible by 8
+         ("causal_conv1d only supports channel dimension divisible by 8").
+      2. xBC stride(2) after transpose, i.e. d_in_proj = 2*d_inner +
+         2*ngroups*d_state + nheads, must also be divisible by 8
+         ("causal_conv1d with channel last layout requires strides ...
+         multiples of 8"). Because d_inner is even and constraint 1 forces
+         2*ngroups*d_state divisible by 8 (when d_inner % 8 == 0), this
+         reduces to nheads divisible by 8.
     """
     inner = d_model * expand
-    headdim = preferred_headdim
-    while headdim > 1 and inner % headdim != 0:
-        headdim //= 2
-    if headdim < 1:
-        headdim = inner
 
-    # nheads parity is the only odd contribution to d_in_proj, so it must
-    # be even before d_state alone can drive d_in_proj to a multiple of 8.
-    nheads = inner // headdim
-    while nheads % 2 != 0 and headdim > 1:
-        headdim //= 2
-        nheads = inner // headdim
+    # Largest headdim that divides d_inner AND yields nheads divisible by 8.
+    headdim = min(preferred_headdim, max(inner // 8, 1))
+    while headdim > 1 and (inner % headdim != 0 or (inner // headdim) % 8 != 0):
+        headdim -= 1
+    if headdim < 1:
+        headdim = 1
 
     d_state = preferred_dstate
     while d_state > 8 and d_state > inner:
         d_state //= 2
 
-    # Bump d_state until d_in_proj is divisible by 8 (at most 4 iterations
-    # since 2*ngroups*d_state cycles through every even residue mod 8).
-    bumps = 0
-    while (2 * inner + 2 * ngroups * d_state + nheads) % 8 != 0 and bumps < 8:
+    # Round d_state up so conv_dim = inner + 2*ngroups*d_state is divisible
+    # by 8 (worst case 4 bumps, since 2*ngroups*d_state moves in steps of 2).
+    while (inner + 2 * ngroups * d_state) % 8 != 0:
         d_state += 1
-        bumps += 1
 
     return headdim, d_state
 
