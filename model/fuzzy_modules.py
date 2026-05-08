@@ -61,17 +61,41 @@ def _make_mamba(d_model, d_state, d_conv, expand, headdim, ngroups):
     )
 
 
-def _choose_mamba2_kwargs(d_model, expand=2, preferred_headdim=64, preferred_dstate=64):
-    """Pick (headdim, d_state) that satisfy Mamba2 divisibility given d_model/expand."""
+def _choose_mamba2_kwargs(d_model, expand=2, preferred_headdim=64, preferred_dstate=64, ngroups=1):
+    """Pick (headdim, d_state) that satisfy Mamba2 divisibility constraints.
+
+    causal_conv1d_cuda's channel-last fast path checks
+    ``stride(0) % 8 == 0 and stride(2) % 8 == 0`` on ``xBC.transpose(1, 2)``.
+    Since xBC is a view sliced out of zxbcdt, its stride(2) after the
+    transpose equals ``d_in_proj = 2*d_inner + 2*ngroups*d_state + nheads``,
+    so we must keep that quantity divisible by 8 or Mamba aborts with
+    "causal_conv1d with channel last layout requires strides ... multiples of 8".
+    """
     inner = d_model * expand
     headdim = preferred_headdim
     while headdim > 1 and inner % headdim != 0:
         headdim //= 2
     if headdim < 1:
         headdim = inner
+
+    # nheads parity is the only odd contribution to d_in_proj, so it must
+    # be even before d_state alone can drive d_in_proj to a multiple of 8.
+    nheads = inner // headdim
+    while nheads % 2 != 0 and headdim > 1:
+        headdim //= 2
+        nheads = inner // headdim
+
     d_state = preferred_dstate
     while d_state > 8 and d_state > inner:
         d_state //= 2
+
+    # Bump d_state until d_in_proj is divisible by 8 (at most 4 iterations
+    # since 2*ngroups*d_state cycles through every even residue mod 8).
+    bumps = 0
+    while (2 * inner + 2 * ngroups * d_state + nheads) % 8 != 0 and bumps < 8:
+        d_state += 1
+        bumps += 1
+
     return headdim, d_state
 
 
